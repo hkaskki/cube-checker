@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>立方体お絵描き採点</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Noto Sans JP",sans-serif;background:#f5f7fa;color:#222}
+  .wrap{max-width:1050px;margin:auto;padding:18px}
+  h1{margin:0 0 8px}
+  .desc{margin:0 0 14px;color:#555}
+  .tabs{display:flex;gap:8px;margin-bottom:10px}
+  button{border:0;border-radius:10px;padding:10px 15px;font-size:15px;cursor:pointer;background:#ddd}
+  button.active{background:#222;color:white}
+  .panel{background:white;border-radius:16px;padding:12px;box-shadow:0 2px 12px #0001}
+  canvas{display:block;width:100%;height:auto;aspect-ratio:1.5;border:2px solid #ccd3dc;border-radius:12px;background:white;touch-action:none}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  #score{font-size:30px;font-weight:800;margin-top:12px}
+  #detail{line-height:1.7}
+  .hint{font-size:14px;color:#666}
+  .hidden{display:none}
+  .ok{color:#16803c}.bad{color:#b42318}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>立方体の正確さチェッカー</h1>
+  <p class="desc">マウスでも指でも描けます。2種類の採点方式を試せます。</p>
+
+  <div class="tabs">
+    <button id="tab12" class="active">① 12本の辺を1本ずつ</button>
+    <button id="tabFree">② 自由に一筆描き</button>
+  </div>
+
+  <div class="panel">
+    <p id="modeText" class="hint">1本の辺を1ストロークで描きます。12本描くと自動採点します。</p>
+    <canvas id="cv" width="1200" height="800"></canvas>
+    <div class="controls">
+      <button id="clear">消去</button>
+      <button id="undo">1本戻す</button>
+      <button id="sample">見本を表示</button>
+      <button id="judge">採点</button>
+    </div>
+    <div id="score"></div>
+    <div id="detail"></div>
+  </div>
+</div>
+
+<script>
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+let mode='12', drawing=false, strokes=[], cur=[];
+let sampleOn=false;
+
+function pos(e){
+  const r=cv.getBoundingClientRect();
+  const p=e.touches?e.touches[0]:e;
+  return {x:(p.clientX-r.left)*cv.width/r.width,y:(p.clientY-r.top)*cv.height/r.height};
+}
+function redraw(){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  if(sampleOn) drawSample();
+  ctx.lineCap='round';ctx.lineJoin='round';ctx.lineWidth=7;ctx.strokeStyle='#222';
+  for(const s of strokes){drawStroke(s)}
+  if(cur.length){drawStroke(cur)}
+}
+function drawStroke(s){
+  if(!s.length)return;
+  ctx.beginPath();ctx.moveTo(s[0].x,s[0].y);
+  for(const p of s.slice(1))ctx.lineTo(p.x,p.y);
+  ctx.stroke();
+}
+function start(e){
+  e.preventDefault();drawing=true;cur=[pos(e)];redraw();
+}
+function move(e){
+  if(!drawing)return;e.preventDefault();cur.push(pos(e));redraw();
+}
+function end(e){
+  if(!drawing)return;e.preventDefault();drawing=false;
+  if(cur.length>3) strokes.push(cur);
+  cur=[];redraw();
+  if(mode==='12' && strokes.length>=12) judge12();
+}
+cv.addEventListener('mousedown',start);cv.addEventListener('mousemove',move);
+window.addEventListener('mouseup',end);
+cv.addEventListener('touchstart',start,{passive:false});
+cv.addEventListener('touchmove',move,{passive:false});
+cv.addEventListener('touchend',end,{passive:false});
+
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+function lineStats(s){
+  const a=s[0], b=s[s.length-1], L=dist(a,b);
+  let err=0;
+  for(const p of s){
+    const cross=Math.abs((b.x-a.x)*(a.y-p.y)-(a.x-p.x)*(b.y-a.y));
+    const d=L?cross/L:999;
+    err+=d*d;
+  }
+  const rms=Math.sqrt(err/s.length);
+  return {a,b,L,rms};
+}
+function angle(s){
+  const z=lineStats(s);
+  return Math.atan2(z.b.y-z.a.y,z.b.x-z.a.x)*180/Math.PI;
+}
+function normalizeAngle(a){
+  while(a<0)a+=180; while(a>=180)a-=180; return a;
+}
+function score12(){
+  const ss=strokes.slice(0,12).map(lineStats);
+  const lengths=ss.map(x=>x.L);
+  const avg=lengths.reduce((a,b)=>a+b,0)/lengths.length;
+  const lenErr=lengths.reduce((a,b)=>a+Math.abs(b-avg)/avg,0)/lengths.length;
+  const lengthScore=Math.max(0,100-lenErr*180);
+
+  const straightErr=ss.reduce((a,b)=>a+b.rms/(b.L||1),0)/ss.length;
+  const straightScore=Math.max(0,100-straightErr*1200);
+
+  const as=ss.map(x=>normalizeAngle(Math.atan2(x.b.y-x.a.y,x.b.x-x.a.x)*180/Math.PI));
+  // A cube drawing in 2D has three dominant edge directions.
+  const bins=[0,0,0];
+  for(const a of as){
+    let best=0,be=999;
+    for(let i=0;i<3;i++){
+      const target=i*60;
+      let d=Math.abs(a-target);d=Math.min(d,180-d);
+      if(d<be){be=d;best=i}
+    }
+    bins[best]+=be;
+  }
+  const angleErr=bins.reduce((a,b)=>a+b,0)/12;
+  const angleScore=Math.max(0,100-angleErr*2.0);
+
+  // Endpoint connection: reward endpoints that are close to other endpoints.
+  let conn=0;
+  for(let i=0;i<12;i++){
+    const ends=[ss[i].a,ss[i].b];
+    for(const p of ends){
+      let md=Infinity;
+      for(let j=0;j<12;j++)if(i!==j){
+        md=Math.min(md,dist(p,ss[j].a),dist(p,ss[j].b));
+      }
+      conn+=Math.min(md/80,1);
+    }
+  }
+  const connectionScore=Math.max(0,100-conn/24*100);
+
+  return {
+    total:Math.round(straightScore*.30+lengthScore*.25+angleScore*.25+connectionScore*.20),
+    straightScore:Math.round(straightScore),
+    lengthScore:Math.round(lengthScore),
+    angleScore:Math.round(angleScore),
+    connectionScore:Math.round(connectionScore)
+  };
+}
+function judge12(){
+  if(strokes.length<12){show("まだ"+(12-strokes.length)+"本足りません。","");return}
+  const r=score12();
+  show(r.total+"%",`直線性 ${r.straightScore}%<br>辺の長さ ${r.lengthScore}%<br>方向・平行性 ${r.angleScore}%<br>頂点の接続 ${r.connectionScore}%`);
+}
+function show(s,d){document.getElementById('score').textContent=s;document.getElementById('detail').innerHTML=d}
+
+function judgeFree(){
+  if(strokes.length===0){show("まず立方体を描いてください。","");return}
+  // Free mode uses the detected strokes, so it is intentionally tolerant:
+  // the user may draw more/less than 12 strokes.
+  const ss=strokes.map(lineStats).filter(x=>x.L>15);
+  if(ss.length<6){show("線が少なすぎます","6本以上の辺を描いてください。");return}
+  const lengths=ss.map(x=>x.L), avg=lengths.reduce((a,b)=>a+b,0)/lengths.length;
+  const lenScore=Math.max(0,100-(lengths.reduce((a,b)=>a+Math.abs(b-avg)/avg,0)/lengths.length)*160);
+  const straightScore=Math.max(0,100-(ss.reduce((a,b)=>a+b.rms/(b.L||1),0)/ss.length)*1200);
+  const dirs=ss.map(x=>normalizeAngle(Math.atan2(x.b.y-x.a.y,x.b.x-x.a.x)*180/Math.PI));
+  let clusterErr=0;
+  for(const a of dirs){
+    let best=999;
+    for(let t=0;t<180;t+=3){
+      const d=Math.min(Math.abs(a-t),180-Math.abs(a-t));
+      best=Math.min(best,d);
+    }
+    clusterErr+=best;
+  }
+  const directionScore=Math.max(0,100-clusterErr/dirs.length*1.2);
+  const countScore=Math.max(0,100-Math.abs(ss.length-12)*7);
+  const total=Math.round(straightScore*.30+lenScore*.25+directionScore*.30+countScore*.15);
+  show(total+"%",`直線性 ${Math.round(straightScore)}%<br>辺の長さ ${Math.round(lenScore)}%<br>3方向へのまとまり ${Math.round(directionScore)}%<br>辺の本数 ${Math.round(countScore)}%`);
+}
+
+function drawSample(){
+  const pts=[
+    {x:260,y:250},{x:650,y:250},{x:860,y:390},{x:470,y:390},
+    {x:260,y:650},{x:650,y:650},{x:860,y:510},{x:470,y:510}
+  ];
+  const edges=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+  ctx.save();ctx.setLineWidth=4;ctx.strokeStyle='#7b8794';ctx.setLineDash([12,10]);
+  for(const [a,b] of edges){ctx.beginPath();ctx.moveTo(pts[a].x,pts[a].y);ctx.lineTo(pts[b].x,pts[b].y);ctx.stroke()}
+  ctx.restore();
+}
+function clearAll(){strokes=[];cur=[];sampleOn=false;show("","");redraw()}
+document.getElementById('clear').onclick=clearAll;
+document.getElementById('undo').onclick=()=>{strokes.pop();redraw();show("","")};
+document.getElementById('sample').onclick=()=>{sampleOn=!sampleOn;redraw()};
+document.getElementById('judge').onclick=()=>mode==='12'?judge12():judgeFree();
+
+document.getElementById('tab12').onclick=()=>{
+  mode='12';document.getElementById('tab12').classList.add('active');document.getElementById('tabFree').classList.remove('active');
+  document.getElementById('modeText').textContent='1本の辺を1ストロークで描きます。12本描くと自動採点します。';
+  clearAll();
+};
+document.getElementById('tabFree').onclick=()=>{
+  mode='free';document.getElementById('tabFree').classList.add('active');document.getElementById('tab12').classList.remove('active');
+  document.getElementById('modeText').textContent='線の本数を気にせず自由に立方体を描き、描かれた線から正確さを推定します。';
+  clearAll();
+};
+redraw();
+</script>
+</body>
+</html>
