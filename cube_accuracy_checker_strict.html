@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>立方体 正確性チェッカー</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:12px;background:#f4f4f4;color:#222;font-family:-apple-system,BlinkMacSystemFont,sans-serif;text-align:center}
+h1{font-size:22px}p{font-size:14px;color:#555}canvas{width:100%;height:auto;background:white;border:2px solid #333;border-radius:8px;touch-action:none}
+button{font-size:17px;padding:11px 16px;margin:8px 3px;border:0;border-radius:8px;background:#222;color:white}
+#result{display:none;background:white;padding:14px;border-radius:10px;text-align:left;margin-top:10px}
+#score{text-align:center;font-size:36px;font-weight:bold}.bar{height:12px;background:#ddd;border-radius:8px;overflow:hidden;margin:8px 0 14px}#fill{height:100%;width:0;background:#222}
+.item{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid #eee;font-size:14px}.note{font-size:13px;color:#666;line-height:1.5;margin-top:10px}
+</style></head>
+<body>
+<h1>立方体 正確性チェッカー</h1>
+<p>辺を1本ずつ描いてください。今回は厳しめの基準で採点します。</p>
+<canvas id="c" width="900" height="600"></canvas>
+<div><button onclick="clearAll()">消去</button><button onclick="undo()">1本戻す</button><button onclick="judge()">採点</button></div>
+<div id="result"><div id="score">--%</div><div class="bar"><div id="fill"></div></div><div id="details"></div>
+<div class="note">※ 画像認識AIではなく、線の本数・長さ・方向・端点の接続を使った近似採点です。辺は1本ずつ描いてください。</div></div>
+<script>
+const c=document.getElementById('c'),x=c.getContext('2d');let lines=[],cur=null,down=false;
+function p(e){let r=c.getBoundingClientRect();return{x:(e.clientX-r.left)*c.width/r.width,y:(e.clientY-r.top)*c.height/r.height}}
+function start(e){e.preventDefault();down=true;cur=[p(e)]}function move(e){if(!down)return;e.preventDefault();cur.push(p(e));drawAll()}
+function end(e){if(!down)return;e.preventDefault();down=false;if(cur&&cur.length>2&&Math.hypot(cur.at(-1).x-cur[0].x,cur.at(-1).y-cur[0].y)>25)lines.push(cur);cur=null;drawAll()}
+c.addEventListener('pointerdown',start);c.addEventListener('pointermove',move);c.addEventListener('pointerup',end);c.addEventListener('pointercancel',end);
+function drawLine(s){if(!s||s.length<2)return;x.beginPath();x.moveTo(s[0].x,s[0].y);s.slice(1).forEach(q=>x.lineTo(q.x,q.y));x.stroke()}
+function drawAll(){x.clearRect(0,0,c.width,c.height);x.lineWidth=5;x.lineCap='round';x.lineJoin='round';x.strokeStyle='#111';lines.forEach(drawLine);drawLine(cur)}
+function clearAll(){lines=[];cur=null;document.getElementById('result').style.display='none';drawAll()}
+function undo(){lines.pop();document.getElementById('result').style.display='none';drawAll()}
+const clamp=v=>Math.max(0,Math.min(100,v));
+const ad=(a,b)=>{let d=Math.abs(a-b)%Math.PI;return d>Math.PI/2?Math.PI-d:d};
+function getEdges(){return lines.map(s=>{let a=s[0],b=s[s.length-1],dx=b.x-a.x,dy=b.y-a.y;return{a,b,len:Math.hypot(dx,dy),ang:Math.atan2(dy,dx)}})}
+function directionGroups(es){
+ if(!es.length)return {ids:[],centers:[]};let cs=[es[0].ang,es[Math.floor(es.length/2)].ang,es.at(-1).ang];
+ for(let n=0;n<12;n++){let sums=cs.map(()=>[0,0,0]);es.forEach(e=>{let k=0,d=Infinity;cs.forEach((v,i)=>{let z=ad(e.ang,v);if(z<d){d=z;k=i}});sums[k][0]+=Math.cos(2*e.ang);sums[k][1]+=Math.sin(2*e.ang);sums[k][2]++});cs=cs.map((v,i)=>sums[i][2]?Math.atan2(sums[i][1],sums[i][0])/2:v)}
+ let ids=es.map(e=>{let k=0,d=Infinity;cs.forEach((v,i)=>{let z=ad(e.ang,v);if(z<d){d=z;k=i}});return k});return{ids,centers:cs}
+}
+function vertexScore(es){
+ if(!es.length)return 0;let avg=es.reduce((s,e)=>s+e.len,0)/es.length,tol=Math.max(12,avg*.12),cs=[];
+ es.forEach((e,i)=>[{...e.a,edge:i},{...e.b,edge:i}].forEach(q=>{let k=-1,d0=Infinity;cs.forEach((v,j)=>{let d=Math.hypot(v.x-q.x,v.y-q.y);if(d<d0){d0=d;k=j}});if(k>=0&&d0<tol){let v=cs[k],n=v.pts.length+1;v.x+=(q.x-v.x)/n;v.y+=(q.y-v.y)/n;v.pts.push(q)}else cs.push({x:q.x,y:q.y,pts:[q]})}));
+ let nscore=clamp(100-Math.abs(cs.length-8)*24),deg=cs.reduce((s,v)=>s+clamp(100-Math.abs(v.pts.length-3)*45),0)/cs.length;return nscore*.55+deg*.45
+}
+function judge(){
+ document.getElementById('result').style.display='block';let e=getEdges();if(!e.length){show(0,[['辺の本数','0本 / 12本']],'まず辺を描いてください。');return}
+ let count=clamp(100-Math.abs(e.length-12)*25),avg=e.reduce((s,v)=>s+v.len,0)/e.length,cv=Math.sqrt(e.reduce((s,v)=>s+(v.len-avg)**2,0)/e.length)/avg,len=clamp(100-cv*220);
+ let {ids}=directionGroups(e),groups=[0,0,0],sum=0;e.forEach((v,i)=>groups[ids[i]]++);
+ let means=[0,1,2].map(k=>{let a=e.filter((v,i)=>ids[i]===k);return a.length?Math.atan2(a.reduce((s,v)=>s+Math.sin(2*v.ang),0),a.reduce((s,v)=>s+Math.cos(2*v.ang),0))/2:0});
+ e.forEach((v,i)=>sum+=ad(v.ang,means[ids[i]]));let dir=clamp(100-(sum/e.length)*180/Math.PI*7-(3-groups.filter(v=>v>0).length)*25);
+ let balance=clamp(100-(groups.reduce((s,v)=>s+Math.abs(v-4),0))*18),vertex=vertexScore(e),pl=[];
+ for(let k=0;k<3;k++){let a=e.filter((v,i)=>ids[i]===k).map(v=>v.len);if(a.length<2){pl.push(0);continue}let m=a.reduce((s,v)=>s+v,0)/a.length,cv2=Math.sqrt(a.reduce((s,v)=>s+(v-m)**2,0)/a.length)/m;pl.push(clamp(100-cv2*240))}
+ let parallel=pl.reduce((s,v)=>s+v,0)/3,total=count*.12+len*.12+dir*.24+balance*.12+vertex*.28+parallel*.12;if(e.length!==12)total-=Math.min(20,Math.abs(e.length-12)*3);
+ let score=Math.round(clamp(total)),comment=score>=95?'非常に高い精度です。':score>=85?'かなり正確ですが、細かなずれが残っている可能性があります。':score>=70?'形は近いですが、頂点や方向を整えましょう。':score>=50?'線のつながり・方向・長さを見直しましょう。':'立方体の基本構造から確認してみましょう。';
+ show(score,[['辺の本数',`${e.length}本 / 12本（${Math.round(count)}点）`],['全体の長さの均一さ',`${Math.round(len)}点`],['3方向の平行性',`${Math.round(dir)}点`],['方向ごとの本数',`${groups.join('・')}本（${Math.round(balance)}点）`],['頂点の接続',`${Math.round(vertex)}点`],['同じ方向の辺の長さ',`${Math.round(parallel)}点`]],comment)
+}
+function show(s,items,comment){document.getElementById('score').textContent=s+'%';document.getElementById('fill').style.width=s+'%';document.getElementById('details').innerHTML=items.map(v=>`<div class="item"><span>${v[0]}</span><b>${v[1]}</b></div>`).join('')+`<div class="note">${comment}</div>`}
+drawAll();
+</script></body></html>
